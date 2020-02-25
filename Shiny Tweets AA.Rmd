@@ -1,0 +1,406 @@
+---
+title: "American Airlines Tweets Analysis"
+resource_files:
+- tablemain.rds
+- twitter1.rds
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+---
+
+Sidebar {.sidebar}
+=======================================================================
+
+### American Airlines Tweets Analysis
+
+This is a dashboard showing tweet data about American Airlines. Some verified user tweets are shown along with their sentiment.
+
+
+
+
+```{r, include=FALSE, warning = FALSE, message=FALSE}
+ library(rtweet)
+library(dplyr)
+library(tidyr)
+library(base64enc)
+library(stringr)
+library(clean)
+library(tidyverse)
+library(tidytext)
+library(tm)
+ library(maps)
+ library(syuzhet)
+library(ggplot2)
+ library(wordcloud2)
+library(emo)
+library(readr)
+library(textreadr)
+library(rvest)
+library(ggtext)
+library(DT) 
+library(shiny)
+library(shinydashboard)
+library(httr)
+twitter_token <- create_token(
+  app = "dev_SMA",
+  consumer_key = "ae9IKjd7oGky0rEBThovw4TcE" ,
+  consumer_secret = "hYf6XS6adDwhkYBvcTkAWulWRgz9mAH7fPGfeVURZvMAF7AgEX",
+  access_token = "1218984534525521922-YAeLhAU6hinsEFQJC4LDuibgkXnozp",
+  access_secret = "5RIpNDP0I7hd1Xc3wa8eKQuHEdAqVmzJqe8PITVORBy2L",
+  set_renv=FALSE)
+
+
+#rtweets <- read.csv(file = ".\\AA_hist.csv", stringsAsFactors = FALSE)
+rtweets <- readRDS(file = "tablemain.rds")
+rtweet <- readRDS(file = "twitter1.rds")
+```
+
+
+
+    
+Dashboard
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+### Verified Users Tweets Analysis
+
+
+```{r, warning = FALSE, message=FALSE}
+
+x <- rtweets[which(rtweets$verified == TRUE),]
+
+
+
+tweet_table <- x %>% select("created_at", "screen_name", "profile_image_url", "text", "urls_expanded_url","category_senti") %>%
+  arrange(desc(created_at))
+
+tweet_table$created_at <- strptime(as.POSIXct(tweet_table$created_at), 
+                                format = "%Y-%m-%d")
+tweet_table$created_at <- format(tweet_table$created_at, "%Y-%m-%d")
+
+tweet_table$profile_image_url <- paste0("'<img src=",'"',tweet_table$profile_image_url,'"',' height="52"',"></img>'")
+
+createLink <- function(x) {
+  if(is.na(x)){
+    return("")
+  }else{
+    sprintf(paste0('<a href="', URLdecode(x),'" target="_blank">', 
+                   substr(x, 1, 25) ,'</a>'))
+  }
+}
+
+tweet_table$urls_expanded_url <- lapply(tweet_table$urls_expanded_url, 
+                                     function(x) sapply(x, createLink))
+
+
+
+data_table_tweets <- datatable(tweet_table, extensions = 'Buttons', 
+                         options = list(scrollX = TRUE, autoWidth = TRUE, dom = 'Bfrtip', buttons = c('csv','excel'),
+                                        columnDefs = list(list(
+                                          width = '70%', 
+                                          targets = c(2)))),
+                         rownames = FALSE,
+                         fillContainer = TRUE,
+                         width = "100%", 
+                         colnames = c("date","Handle","Profile Picture", "Text", "URL","sentiment"), escape = FALSE)
+
+data_table_tweets <- formatStyle(data_table_tweets, columns = 1:6, fontSize = '70%')
+data_table_tweets <- formatStyle(data_table_tweets, columns = 4, width = '500px')
+data_table_tweets <- formatStyle(data_table_tweets, columns = "category_senti", target = "row", backgroundColor = styleEqual(c("Negative","Positive","Neutral"), c('red', 'lightgreen','grey')))
+
+# data_table_tweets
+
+renderDataTable(data_table_tweets)
+
+
+```
+ 
+ 
+Frequency
+=======================================================================
+
+Row
+-------------------------------------
+
+    
+### Tweet Frequency Over Time
+    
+```{r, warning = FALSE, message=FALSE}
+freq_over_time = rtweets %>%
+  ts_plot("3 hours") +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(plot.title = ggplot2::element_text(face = "bold")) +
+  ggplot2::labs(
+    x = NULL, y = NULL,
+    title = "Frequency of #AmericanAirlines Twitter statuses",
+    subtitle = "Twitter status (tweet) counts aggregated using three-hour intervals",
+    caption = "\nSource: Data collected from Twitter's REST API via rtweet"
+  ) 
+renderPlot(freq_over_time)
+```
+
+
+
+Emoji
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+
+### Emoji Analysis
+
+
+```{r, warning = FALSE, message=FALSE}
+rtweet <- readRDS(file = "twitter1.rds")
+
+
+emojis_tweets <- rtweet %>%
+  mutate(emoji = emo::ji_extract_all(text)) %>%
+  unnest(cols = c(emoji)) %>%
+  count(emoji, sort = TRUE)
+
+
+#emoji_sub <- emo :: jis[,c("emoji","name","group","subgroup")]
+
+#emoji_list<-merge(x=emojis_tweets,y=emoji_sub,by="emoji",all.x=TRUE)
+
+
+
+emoji_to_link <- function(x) {
+  paste0("https://emojipedia.org/emoji/",x) %>%
+    read_html() %>%
+    html_nodes("tr td a") %>%
+    .[1] %>%
+    html_attr("href") %>%
+    paste0("https://emojipedia.org/", .) %>%
+    read_html() %>%
+    html_node('div[class="vendor-image"] img') %>%
+    html_attr("src")
+}
+
+link_to_img <- function(x, size = 25) {
+  paste0("<img src='", x, "' width='", size, "'/>")
+}
+
+top <- emojis_tweets %>%
+  slice(1:15) %>%
+  mutate(url = map_chr(emoji, slowly(~emoji_to_link(.x), rate_delay(1))),
+         label = link_to_img(url))
+
+
+offset <- max(top$n) / 20
+
+top %>%
+  ggplot(aes(fct_reorder(emoji, n, .desc = TRUE), n, label = label)) +
+  geom_col() +
+  geom_richtext(aes(y = n + offset), fill = NA, label.color = NA,
+                label.padding = grid::unit(rep(0, 4), "pt")
+  ) +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  labs(x = NULL) +
+  theme_minimal() 
+
+
+
+```
+
+
+WordCloud
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+    
+### HashTags Word Cloud
+
+```{r, warning = FALSE, message=FALSE}
+
+twet <- mutate(rtweets, hashtags = gsub(x = hashtags, pattern = ',', replacement = ""))
+
+twet <- twet[,c("user_id","created_at","hashtags")]
+
+twet_tokenized <- twet %>% unnest_tokens(output = "word", # how should the new column be named?
+                                         input = hashtags, # where can we find the text? 
+                                         token = "words", # which tokenization scheme should we follow?
+                                         drop=FALSE,to_lower=TRUE)
+
+
+
+tf <- termFreq(twet_tokenized$word)
+w <- data.frame(names(tf),tf)
+w <- w %>% arrange(desc(tf)) %>% top_n(300)
+colnames(w) <- c('word','freq')
+
+wordcloud2(w,shape = "star",
+           size = 5, color = "skyblue", shuffle = TRUE)
+```
+
+Topics
+=======================================================================
+    
+### HashTags Word Cloud
+```{r, warning = FALSE, message=FALSE}
+tweetsTokenized <- rtweets %>% select(c("status_id", "text")) %>% unnest_tokens(output = "word",
+                                               input = text,
+                                               token = "words",
+                                               drop=FALSE,to_lower=TRUE)
+
+# do some basic preprocessing steps:
+
+tweetsTokenized <- tweetsTokenized %>%
+  anti_join(stop_words) %>%       # note that we use all stopword dictionaries here
+  count(status_id,word , sort=TRUE) %>%
+  cast_dtm(document = status_id, term = word,
+           value = n, weighting = tm::weightTf)
+
+
+
+if (!require("topicmodels")) install.packages("topicmodels", quiet=TRUE) ; require("topicmodels")
+
+tweets_lda <- LDA(tweetsTokenized, k = 2,method="gibbs",control = list(nstart = 5, burnin = 2000, best = TRUE, seed = 2:6) )
+
+tweet_topics <- tidy(tweets_lda, matrix = "beta")
+
+# you can use the following code to get the top terms per topic
+top_tweet_terms <- tweet_topics %>%
+  group_by(topic) %>%
+  top_n(30, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) %>%
+    filter(term != "airline",
+         term != "americanairlines",
+         term != "american",
+         term != "americanair",
+         term != "aa",
+         term != "airlines")
+
+if (!require("ggplot2")) install.packages("ggplot2", quiet=TRUE) ; require("ggplot2")
+
+top_topic_terms = top_tweet_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() +
+  scale_x_reordered()
+
+renderPlot(top_topic_terms)
+```
+
+### topic dist over tweets
+```{r, warning = FALSE, message=FALSE}
+tweet_documents <- tidy(tweets_lda, matrix = "gamma")
+# CHoose, per tweet, the most important topic (the one with the highest weight)
+tweet_doc_topic <- tweet_documents %>%
+  group_by(document) %>%
+  arrange(desc(gamma)) %>%
+  slice(1)
+
+tweet_topic_dist = tweet_doc_topic %>%
+  group_by(topic) %>% 
+  summarise(nbr_documents = n())
+renderTable(tweet_topic_dist)
+```
+
+
+
+Likes Analysis
+=======================================================================
+```{r, warning = FALSE, message=FALSE}
+tweets_clean <- mutate(rtweets, text_clean = gsub(x = text, pattern = "[0-9]+|[[:punct:]]|\\(.*\\)", replacement = ""))
+
+tweets_clean.df <- as.vector(tweets_clean$text_clean)
+
+emotion.df <- get_nrc_sentiment(tweets_clean.df)
+
+emotion.df2 <- cbind(tweets_clean$text_clean, emotion.df) 
+
+
+sent.value <- syuzhet::get_sentiment(tweets_clean.df)
+
+positive_tweets <- tweets_clean.df[sent.value>0]
+negative_tweets <- tweets_clean.df[sent.value<0]
+neutral_tweets <- tweets_clean.df[sent.value==0]
+
+# Classify as Positive, Negative or Neutral tweets
+
+category_senti <- ifelse(sent.value < 0, "Negative", ifelse(sent.value > 0, "Positive", "Neutral"))
+
+category_senti2 <- cbind(tweets_clean$text_clean ,category_senti,sent.value) 
+
+category_senti2 <- as_data_frame(category_senti2)
+
+cat_senti3 <- cbind(category_senti2 ,tweets_clean$retweet_favorite_count)
+cat_senti3 <- cbind(cat_senti3 ,tweets_clean$user_id)
+cat_senti3 <- cbind(cat_senti3 ,tweets_clean$created_at)
+cat_senti3 <- cbind(cat_senti3, tweets_clean$retweet_retweet_count)
+
+# Rename column
+names(cat_senti3)[names(cat_senti3) == "V1"] <- "Text"
+names(cat_senti3)[names(cat_senti3) == "sent.value"] <- "Sentiment_Value"
+names(cat_senti3)[names(cat_senti3) == "tweets_clean$retweet_favorite_count"] <- "Likes"
+names(cat_senti3)[names(cat_senti3) == "tweets_clean$user_id"] <- "User_ID"
+names(cat_senti3)[names(cat_senti3) == "tweets_clean$created_at"] <- "Creation_Date"
+names(cat_senti3)[names(cat_senti3) == "category_senti"] <- "Sentiment_Cat"
+names(cat_senti3)[names(cat_senti3) == "tweets_clean$retweet_retweet_count"] <- "Comments"
+
+cat_senti3$Sentiment_Value =as.numeric(cat_senti3$Sentiment_Value)
+
+cat_senti3[is.na(cat_senti3)] <- 0
+
+cat_senti4 = cat_senti3
+
+cat_senti4<-cat_senti4[!(cat_senti4$Sentiment_Cat=="Neutral"),]
+
+
+p <- ggplot(data = cat_senti4, aes(y = Sentiment_Value, x = Likes))
+
+p <- p + geom_point() +
+  scale_x_continuous(breaks = seq(0, 300, by = 100))
+
+p + aes(color = Likes > 10)
+
+p <- p + aes(color = Likes > 10) +
+  scale_color_brewer("", palette = "Set1",
+                     labels = c("Likes < 10", "Likes > 10"))
+
+Likes_Plot <- p + geom_smooth(method = "loess",
+                              size = 1, color = "black") +
+  labs(y = " Sentiment value",
+       x = "Number of likes",
+       title = "Number of likes depending on sentiment value")
+
+
+```
+
+
+
+comments Analysis
+=======================================================================
+
+``` {r, warning = FALSE, message=FALSE} 
+C <- ggplot(data = cat_senti4, aes(y = Sentiment_Value, x = Comments))
+
+C <- C + geom_point() +
+  scale_x_continuous(breaks = seq(0, 300, by = 100))
+
+C + aes(color = Comments > 2)
+
+C <- C + aes(color = Comments > 2) +
+  scale_color_brewer("", palette = "Set1",
+                     labels = c("Comments < 2", "Comments > 2"))
+
+Comments_Plot <- C + geom_smooth(method = "loess",
+                                 size = 1, color = "black") +
+  labs(y = " Sentiment value",
+       x = "Number of comments",
+       title = "Number of comments depending on sentiment value")
+
+
+
+```
